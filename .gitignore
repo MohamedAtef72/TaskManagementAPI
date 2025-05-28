@@ -361,3 +361,12 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# ... (rest of the excellent .gitignore content you provided) ...
+
+# My Custom Ignores / Sensitive Project Configuration
+# Ignore appsettings files containing sensitive data
+# The double asterisk (**) means "match zero or more directories"
+# so it will ignore these files no matter where they are within your repo.
+**/appsettings.json
+**/appsettings.*.json
