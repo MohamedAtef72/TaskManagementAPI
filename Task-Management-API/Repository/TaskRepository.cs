@@ -1,64 +1,78 @@
 ﻿using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Task_Management_API.DTO;
+using Task_Management_API.Interfaces;
 using Task_Management_API.Models;
 namespace Task_Management_API.Repository
 {
-    public class TaskRepository
+    public class TaskRepository : BaseRepository<Tasks>, ITaskRepository
     {
-        private readonly UserManager<ApplicationUser> _UserManager;
-        private readonly AppDbContext _Context;
+        private readonly UserManager<ApplicationUser> _userManager;
         private readonly IHttpContextAccessor _httpContextAccessor;
-        public TaskRepository(UserManager<ApplicationUser> UserManager, AppDbContext Context, IHttpContextAccessor httpContextAccessor)
+
+        public TaskRepository(UserManager<ApplicationUser> userManager, AppDbContext context, IHttpContextAccessor httpContextAccessor)
+            : base(context)
         {
-            _UserManager = UserManager;
-            _Context = Context;
+            _userManager = userManager;
             _httpContextAccessor = httpContextAccessor;
         }
-        public List<Tasks> AllTasks()
+
+        // Get user-specific tasks
+        public async Task<List<TaskInformation>> GetUserTasksAsync(string userId)
         {
-            var Tasks = _Context.Tasks.ToList();
-            return Tasks;
-        }
-        public Tasks SpecificTask(int id)
-        {
-            var Task = _Context.Tasks.FirstOrDefault(u => u.Id == id);
-            return Task;
-        }
-        public async Task<List<TaskInformation>> TasksRelatedToUser(string userId)
-        {
-            var tasksFromDatabase = await _Context.Tasks
+            var tasksFromDatabase = await _context.Tasks
                 .Where(x => x.UserId == userId)
                 .ToListAsync();
-            var Tasks = new List<TaskInformation>();
-            foreach(var task in tasksFromDatabase)
+
+            var tasks = tasksFromDatabase.Select(task => new TaskInformation
             {
-                var item = new TaskInformation
-                {
-                    Title = task.Title,
-                    Description = task.Description,
-                    Status = task.Status,
-                    DueDate = task.DueDate
-                };
-                Tasks.Add(item);
-            }
-            return Tasks;
+                Title = task.Title,
+                Description = task.Description,
+                Status = task.Status,
+                DueDate = task.DueDate
+            }).ToList();
+
+            return tasks;
         }
-        public void AddTask(Tasks task)
+
+        // Get user tasks as entities
+        public async Task<List<Tasks>> GetUserTasksEntitiesAsync(string userId)
         {
-             _Context.Tasks.Add(task);
+            return await _context.Tasks
+                .Where(x => x.UserId == userId)
+                .ToListAsync();
         }
-        public void UpdateTask(Tasks task)
+
+        // Get specific task with user ownership check
+        public async Task<Tasks?> GetTaskByIdAsync(int taskId, string userId)
         {
-            _Context.Tasks.Update(task);
+            return await _context.Tasks
+                .FirstOrDefaultAsync(t => t.Id == taskId && t.UserId == userId);
         }
-        public void DeleteTask(Tasks task)
+
+        // Check if task is owned by user
+        public async Task<bool> IsTaskOwnedByUserAsync(int taskId, string userId)
         {
-            _Context.Tasks.Remove(task);
+            return await _context.Tasks
+                .AnyAsync(t => t.Id == taskId && t.UserId == userId);
         }
-        public async Task Save()
+
+        // Get user task count
+        public async Task<int> GetUserTaskCountAsync(string userId)
         {
-            await _Context.SaveChangesAsync();
+            return await _context.Tasks
+                .CountAsync(t => t.UserId == userId);
+        }
+
+        // Delete task by ID with user ownership check
+        public async Task<bool> DeleteTaskByIdAsync(int taskId, string userId)
+        {
+            var task = await GetTaskByIdAsync(taskId, userId);
+            if (task == null)
+                return false;
+
+            await DeleteAsync(task);
+            return true;
         }
     }
 }
