@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Identity;
 using Task_Management_API.DTO;
 using Task_Management_API.Models;
+using Task_Management_API.Paggination;
 
 namespace Task_Management_API.Interfaces
 {
@@ -8,6 +9,8 @@ namespace Task_Management_API.Interfaces
     {
         // Get Operations
         Task<List<UserInformation>> GetAllUsersAsync();
+        Task<PaginatedList<UserInformation>> GetAllPaginationAsync(int pageNumber, int pageSize);
+
         Task<ApplicationUser?> GetUserByIdAsync(string userId);
         string? GetUserIdFromJwtClaims();
 
