@@ -5,7 +5,9 @@ using Task_Management_API.DTO;
 using Microsoft.AspNetCore.Authorization;
 using Task_Management_API.Interfaces; // For ITaskRepository, IUserRepository
 using Task_Management_API.RolesConstant; // For Roles constants
-using Microsoft.Extensions.Logging; // For ILogger
+using Microsoft.Extensions.Logging;
+using System.Text.Json;
+using Task_Management_API.Paggination; // For ILogger
 
 namespace Task_Management_API.Controllers
 {
@@ -27,29 +29,49 @@ namespace Task_Management_API.Controllers
 
         // Get All Tasks For Admins - Only Admins can see all tasks across the system
         [HttpGet("Get")]
-        [Authorize(Roles = Roles.Admin)] // Restrict to Admin only
-        public async Task<IActionResult> GetAllTasks()
+        [Authorize(Roles = Roles.Admin)]
+        public async Task<IActionResult> GetAllTasks([FromQuery] PaginationParams paginationParams)
         {
             try
             {
-                // Ensure GetAllAsync returns Task<IEnumerable<Tasks>>
-                var tasks = await _taskRepo.GetAllAsync();
+                var paginatedTasks = await _taskRepo.GetAllPaginationAsync(
+                    paginationParams.PageNumber,
+                    paginationParams.ValidatedPageSize);
 
-                if (tasks == null || !tasks.Any()) // Check for null or empty collection
+                if (!paginatedTasks.Items.Any())
                 {
-                    _logger.LogInformation("No tasks found in the system for admin view.");
+                    _logger.LogInformation("No tasks found.");
                     return Ok(new { Message = "No tasks found.", Tasks = new List<Tasks>() });
                 }
 
-                _logger.LogInformation("All tasks retrieved successfully for admin view.");
-                return Ok(new { Message = "Tasks retrieved successfully.", Tasks = tasks });
+                Response.Headers.Add("X-Pagination", JsonSerializer.Serialize(new
+                {
+                    paginatedTasks.TotalCount,
+                    paginatedTasks.PageSize,
+                    paginatedTasks.CurrentPage,
+                    paginatedTasks.TotalPages
+                }));
+
+                return Ok(new
+                {
+                    Message = "Tasks retrieved successfully.",
+                    Tasks = paginatedTasks.Items,
+                    PageInfo = new
+                    {
+                        paginatedTasks.CurrentPage,
+                        paginatedTasks.PageSize,
+                        paginatedTasks.TotalCount,
+                        paginatedTasks.TotalPages
+                    }
+                });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error retrieving all tasks for admin.");
-                return StatusCode(StatusCodes.Status500InternalServerError, new ErrorResponse { Message = "An error occurred while retrieving all tasks." });
+                _logger.LogError(ex, "Error retrieving paginated tasks.");
+                return StatusCode(500, new { Message = "Server error occurred." });
             }
         }
+
 
         // Get All Tasks Related With Current User - Any authenticated user can view their own tasks
         [HttpGet("Show")]

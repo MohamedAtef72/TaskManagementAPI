@@ -1,6 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Task_Management_API.Interfaces;
 using Task_Management_API.Models;
+using Task_Management_API.Paggination;
 
 namespace Task_Management_API.Repository
 {
@@ -15,6 +16,13 @@ namespace Task_Management_API.Repository
             _dbSet = context.Set<T>();
         }
 
+        public virtual async Task<PaginatedList<T>> GetAllPaginationAsync(int pageNumber, int pageSize)
+        {
+            IQueryable<T> query = _dbSet;
+            return await PaginatedList<T>.CreateAsync(query, pageNumber, pageSize);
+        }
+
+
         public virtual async Task<T> GetByIdAsync(int id)
         {
             return await _dbSet.FindAsync(id);
@@ -24,7 +32,6 @@ namespace Task_Management_API.Repository
         {
             return await _dbSet.ToListAsync();
         }
-
         public virtual async Task AddAsync(T entity)
         {
             await _dbSet.AddAsync(entity);

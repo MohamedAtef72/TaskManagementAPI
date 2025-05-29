@@ -28,31 +28,50 @@ namespace Task_Management_API.Controllers
         }
 
         // Get all users - Typically restricted to Admin or Manager roles for security
-        [HttpGet()]
-        [Authorize(Roles = Roles.Admin + "," + Roles.Manager)] // Accessible by Admin or Manager
-        public async Task<IActionResult> Get() // Changed to async to match _UserRepo.GetAllUsersAsync()
+        [HttpGet("Get")]
+        [Authorize(Roles = Roles.Admin + "," + Roles.Manager)]
+        public async Task<IActionResult> Get([FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 10)
         {
             try
             {
-                // Assuming GetAllUsersAsync is an async method in IUserRepository returning List<UserInformation>
-                // You might want to use GetUsersWithRolesAsync if you need more details.
-                var users = await _UserRepo.GetAllUsersAsync(); // Make sure GetAllUsersAsync is awaited
+                var paginatedUsers = await _UserRepo.GetAllPaginationAsync(pageNumber, pageSize);
 
-                if (users == null || !users.Any())
+                if (paginatedUsers == null || !paginatedUsers.Items.Any())
                 {
                     _logger.LogInformation("No users found in the system.");
-                    return Ok(new { Message = "No users found.", Users = new List<UserInformation>() }); // Return empty list
+                    return Ok(new { Message = "No users found.", Users = new List<UserInformation>() });
                 }
 
-                _logger.LogInformation("All users retrieved successfully.");
-                return Ok(new { Message = "Users retrieved successfully.", Users = users });
+                // Add pagination info to response headers (optional but recommended)
+                Response.Headers.Add("X-Pagination", System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    paginatedUsers.TotalCount,
+                    paginatedUsers.PageSize,
+                    paginatedUsers.CurrentPage,
+                    paginatedUsers.TotalPages
+                }));
+
+                _logger.LogInformation("Users retrieved successfully with pagination.");
+                return Ok(new
+                {
+                    Message = "Users retrieved successfully.",
+                    Users = paginatedUsers.Items,
+                    PageInfo = new
+                    {
+                        paginatedUsers.CurrentPage,
+                        paginatedUsers.PageSize,
+                        paginatedUsers.TotalCount,
+                        paginatedUsers.TotalPages
+                    }
+                });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error retrieving all users.");
-                return StatusCode(StatusCodes.Status500InternalServerError, new ErrorResponse { Message = "An error occurred while retrieving users." });
+                _logger.LogError(ex, "Error retrieving paginated users.");
+                return StatusCode(StatusCodes.Status500InternalServerError, new { Message = "An error occurred while retrieving users." });
             }
         }
+
 
         // Update an existing user's own profile
         [HttpPut("Update")]

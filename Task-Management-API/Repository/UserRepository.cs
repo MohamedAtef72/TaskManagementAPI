@@ -6,6 +6,7 @@ using System.Security.Claims;
 using Task_Management_API.DTO;
 using Task_Management_API.Interfaces;
 using Task_Management_API.Models;
+using Task_Management_API.Paggination;
 namespace Task_Management_API.Repository
 {
     public class UserRepository : IUserRepository
@@ -20,6 +21,23 @@ namespace Task_Management_API.Repository
             _context = context;
             _httpContextAccessor = httpContextAccessor;
         }
+        // Get all users Pagination
+
+        public async Task<PaginatedList<UserInformation>> GetAllPaginationAsync(int pageNumber, int pageSize)
+        {
+            var query = _userManager.Users
+                        .Select(user => new UserInformation
+                        {
+                            UserName = user.UserName,
+                            Email = user.Email,
+                            PhoneNumber = user.PhoneNumber,
+                            Country = user.Country
+                        })
+                        .AsNoTracking(); 
+
+            return await PaginatedList<UserInformation>.CreateAsync(query, pageNumber, pageSize);
+        }
+
 
         // Get all users
         public async Task<List<UserInformation>> GetAllUsersAsync()
