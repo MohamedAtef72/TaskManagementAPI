@@ -1,4 +1,6 @@
-﻿using Microsoft.AspNetCore.Http;
+﻿using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
@@ -6,6 +8,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims; 
 using System.Text;
 using Task_Management_API.DTO;
+using Task_Management_API.Interfaces;
 using Task_Management_API.Models;
 using Task_Management_API.RolesConstant; 
 
@@ -17,11 +20,15 @@ namespace Task_Management_API.Controllers
     {
         private readonly UserManager<ApplicationUser> _UserManager;
         private readonly IConfiguration _Config;
+        private readonly ILogger<AccountController> _logger;
+        private readonly ICacheService _cacheService;
 
-        public AccountController(UserManager<ApplicationUser> userManager, IConfiguration Config)
+        public AccountController(UserManager<ApplicationUser> userManager, IConfiguration config ,ILogger<AccountController> logger,ICacheService cacheService)
         {
             _UserManager = userManager;
-            _Config = Config;
+            _Config = config;
+            _logger = logger;
+            _cacheService = cacheService;
         }
 
         [HttpPost("Register")]
@@ -169,6 +176,60 @@ namespace Task_Management_API.Controllers
                 token = new JwtSecurityTokenHandler().WriteToken(MyToken),
                 expiration = MyToken.ValidTo 
             });
+        }
+        [HttpPost("logout")]
+        [Authorize]
+        public async Task<IActionResult> Logout()
+        {
+            // Get the current user's ID from the claims
+            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            if (string.IsNullOrEmpty(userId))
+            {
+                _logger.LogWarning("Logout attempt by unidentifiable user.");
+                return Unauthorized(new ErrorResponse
+                {
+                    Message = "Logout failed.",
+                    Errors = new List<string> { "User not found or not authenticated." }
+                });
+            }
+
+            // Get the JWT token from the Authorization header
+            string token = HttpContext.Request.Headers["Authorization"].FirstOrDefault()?.Split(" ").Last();
+
+            if (string.IsNullOrEmpty(token))
+            {
+                _logger.LogWarning("Logout attempt without a token for user: {UserId}", userId);
+                return BadRequest(new ErrorResponse
+                {
+                    Message = "Logout failed.",
+                    Errors = new List<string> { "No token provided." }
+                });
+            }
+
+            try
+            {
+                // Read the token to get its expiration time
+                var tokenHandler = new JwtSecurityTokenHandler();
+                var jwtToken = tokenHandler.ReadJwtToken(token);
+                var expiration = jwtToken.ValidTo;
+
+                // Blacklist the token in the cache until its natural expiration
+                // The key for the blacklist could be the token itself or its JTI (JWT ID) if available.
+                // For simplicity, we'll use the token itself as the key.
+                await _cacheService.SetAsync(token, "blacklisted", expiration - DateTime.UtcNow);
+
+                _logger.LogInformation("User {UserId} logged out successfully. Token blacklisted until {Expiration}", userId, expiration);
+                return Ok(new { Message = "Logged out successfully." });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during logout for user {UserId}", userId);
+                return StatusCode(StatusCodes.Status500InternalServerError, new ErrorResponse
+                {
+                    Message = "An error occurred during logout.",
+                    Errors = new List<string> { ex.Message }
+                });
+            }
         }
     }
 }

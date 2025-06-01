@@ -1,13 +1,14 @@
 ﻿using Microsoft.AspNetCore.Identity;
 using Task_Management_API.DTO;
 using Task_Management_API.Models;
+using Task_Management_API.Paggination;
 
 namespace Task_Management_API.Interfaces
 {
     public interface ITaskRepository : IMainRepository<Tasks>
     {
         // Specific Get Operations
-        Task<List<TaskInformation>> GetUserTasksAsync(string userId);
+        Task<PaginatedList<TaskInformation>> GetUserTasksPaginationAsync(string userId, int pageNumber, int pageSize);
         Task<Tasks?> GetTaskByIdAsync(int taskId, string userId); // Added userId for security
         Task<List<Tasks>> GetUserTasksEntitiesAsync(string userId); // Returns Tasks entities instead of DTO
 

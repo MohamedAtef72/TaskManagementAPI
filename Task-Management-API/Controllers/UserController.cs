@@ -7,7 +7,9 @@ using Microsoft.AspNetCore.Identity;
 using Task_Management_API.DTO;
 using Task_Management_API.Interfaces; 
 using Task_Management_API.RolesConstant; 
-using Microsoft.Extensions.Logging; 
+using Microsoft.Extensions.Logging;
+using Task_Management_API.Paggination;
+using System.Text.Json;
 
 namespace Task_Management_API.Controllers
 {
@@ -19,22 +21,40 @@ namespace Task_Management_API.Controllers
         private readonly IUserRepository _UserRepo; // Use interface for dependency injection
         private readonly UserManager<ApplicationUser> _userManager; // Already injected
         private readonly ILogger<UserController> _logger; // Inject ILogger
+        private readonly ICacheService _cacheService;
 
-        public UserController(IUserRepository userRepository, UserManager<ApplicationUser> userManager, ILogger<UserController> logger)
+        public UserController(IUserRepository userRepository, UserManager<ApplicationUser> userManager, ILogger<UserController> logger, ICacheService cacheService)
         {
             _UserRepo = userRepository;
             _userManager = userManager;
             _logger = logger;
+            _cacheService = cacheService;
         }
 
         // Get all users - Typically restricted to Admin or Manager roles for security
         [HttpGet("Get")]
         [Authorize(Roles = Roles.Admin + "," + Roles.Manager)]
-        public async Task<IActionResult> Get([FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 10)
+        public async Task<IActionResult> Get([FromQuery] PaginationParams paginationParams)
         {
             try
             {
-                var paginatedUsers = await _UserRepo.GetAllPaginationAsync(pageNumber, pageSize);
+                // Create a unique cache key based on page number and size
+                var cacheKey = $"Users:Page:{paginationParams.PageNumber}:Size:{paginationParams.PageSize}";
+
+                // Try to get cached data
+                var cachedUsers = await _cacheService.GetAsync<object>(cacheKey);
+                if (cachedUsers != null)
+                {
+                    _logger.LogInformation("Users retrieved from cache.");
+                    return Ok(new
+                    {
+                        Message = "Users retrieved from cache.",
+                        Users = cachedUsers
+                    });
+                }
+
+                // If not in cache, retrieve from repository
+                var paginatedUsers = await _UserRepo.GetAllPaginationAsync(paginationParams.PageNumber, paginationParams.PageSize);
 
                 if (paginatedUsers == null || !paginatedUsers.Items.Any())
                 {
@@ -42,8 +62,7 @@ namespace Task_Management_API.Controllers
                     return Ok(new { Message = "No users found.", Users = new List<UserInformation>() });
                 }
 
-                // Add pagination info to response headers (optional but recommended)
-                Response.Headers.Add("X-Pagination", System.Text.Json.JsonSerializer.Serialize(new
+                Response.Headers.Add("X-Pagination", JsonSerializer.Serialize(new
                 {
                     paginatedUsers.TotalCount,
                     paginatedUsers.PageSize,
@@ -51,8 +70,7 @@ namespace Task_Management_API.Controllers
                     paginatedUsers.TotalPages
                 }));
 
-                _logger.LogInformation("Users retrieved successfully with pagination.");
-                return Ok(new
+                var response = new
                 {
                     Message = "Users retrieved successfully.",
                     Users = paginatedUsers.Items,
@@ -63,61 +81,66 @@ namespace Task_Management_API.Controllers
                         paginatedUsers.TotalCount,
                         paginatedUsers.TotalPages
                     }
-                });
+                };
+
+                // Cache the response for 5 minutes
+                await _cacheService.SetAsync(cacheKey, response, TimeSpan.FromMinutes(5));
+
+                return Ok(response);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error retrieving paginated users.");
-                return StatusCode(StatusCodes.Status500InternalServerError, new { Message = "An error occurred while retrieving users." });
+                return StatusCode(500, new { Message = "Server error occurred." });
             }
         }
 
 
-        // Update an existing user's own profile
+
         [HttpPut("Update")]
-        [Authorize(Roles = Roles.Admin + "," + Roles.User + "," + Roles.Manager)] // All authenticated users can update their own profile
+        [Authorize(Roles = Roles.Admin + "," + Roles.User + "," + Roles.Manager)]
         public async Task<IActionResult> Update([FromBody] UserInformation updatedUser)
         {
             try
             {
-                // Get the user ID from the JWT claims
                 var userId = _UserRepo.GetUserIdFromJwtClaims();
                 if (userId == null)
                 {
-                    _logger.LogWarning("Unauthorized attempt to update user profile: User ID not found in JWT claims.");
-                    return Unauthorized(new ErrorResponse { Message = "User ID not found in JWT claims. Please ensure you are authenticated." });
+                    _logger.LogWarning("Unauthorized attempt to update user profile.");
+                    return Unauthorized(new ErrorResponse { Message = "User ID not found in JWT claims." });
                 }
 
-                // **IMPORTANT:** Add ModelState.IsValid check here
                 if (!ModelState.IsValid)
                 {
                     var errors = ModelState.Values.SelectMany(v => v.Errors).Select(e => e.ErrorMessage).ToList();
-                    return BadRequest(new ErrorResponse { Message = "Invalid user data for update.", Errors = errors });
+                    return BadRequest(new ErrorResponse { Message = "Invalid user data.", Errors = errors });
                 }
 
-                // Call the repository method to update the user
                 var result = await _UserRepo.UpdateUserAsync(userId, updatedUser);
 
                 if (!result.Succeeded)
                 {
                     var errors = result.Errors.Select(e => e.Description).ToList();
-                    _logger.LogError("Failed to update user {UserId} profile. Errors: {Errors}", userId, string.Join(", ", errors));
-                    return BadRequest(new ErrorResponse { Message = "Failed to update user profile.", Errors = errors });
+                    _logger.LogError("Failed to update user {UserId}. Errors: {Errors}", userId, string.Join(", ", errors));
+                    return BadRequest(new ErrorResponse { Message = "Update failed.", Errors = errors });
                 }
 
-                _logger.LogInformation("User {UserId} profile updated successfully.", userId);
+                //  Invalidate cache after successful update
+                await _cacheService.RemoveAsync($"user:{userId}");
+
+                _logger.LogInformation("User {UserId} updated successfully.", userId);
                 return Ok(new { Message = "User updated successfully." });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error updating user profile for user {UserId}.", _UserRepo.GetUserIdFromJwtClaims());
-                return StatusCode(StatusCodes.Status500InternalServerError, new ErrorResponse { Message = "An error occurred while updating the user profile." });
+                _logger.LogError(ex, "Error updating user {UserId}.", _UserRepo.GetUserIdFromJwtClaims());
+                return StatusCode(StatusCodes.Status500InternalServerError, new ErrorResponse { Message = "An error occurred." });
             }
         }
 
-        // Delete a user's own account - User can delete themselves, Admin can delete anyone (requires admin method)
+
         [HttpDelete("Delete")]
-        [Authorize(Roles = Roles.User + "," + Roles.Manager)] // Authenticated users can delete their own account. Admin might have a separate endpoint.
+        [Authorize(Roles = Roles.User + "," + Roles.Manager)]
         public async Task<IActionResult> Delete()
         {
             try
@@ -125,28 +148,32 @@ namespace Task_Management_API.Controllers
                 var userId = _UserRepo.GetUserIdFromJwtClaims();
                 if (userId == null)
                 {
-                    _logger.LogWarning("Unauthorized attempt to delete user account: User ID not found in JWT claims.");
-                    return Unauthorized(new ErrorResponse { Message = "User ID not found in JWT claims. Please ensure you are authenticated." });
+                    _logger.LogWarning("Unauthorized attempt to delete user.");
+                    return Unauthorized(new ErrorResponse { Message = "User ID not found in JWT claims." });
                 }
 
-                var result = await _UserRepo.DeleteUserAsync(userId); // This method deletes the user associated with the userId
+                var result = await _UserRepo.DeleteUserAsync(userId);
 
                 if (!result.Succeeded)
                 {
                     var errors = result.Errors.Select(e => e.Description).ToList();
-                    _logger.LogError("Failed to delete user {UserId} account. Errors: {Errors}", userId, string.Join(", ", errors));
-                    return BadRequest(new ErrorResponse { Message = "Failed to delete user account.", Errors = errors });
+                    _logger.LogError("Failed to delete user {UserId}. Errors: {Errors}", userId, string.Join(", ", errors));
+                    return BadRequest(new ErrorResponse { Message = "Delete failed.", Errors = errors });
                 }
 
-                _logger.LogInformation("User {UserId} account deleted successfully.", userId);
+                // ✅ Invalidate cache after successful delete
+                await _cacheService.RemoveAsync($"user:{userId}");
+
+                _logger.LogInformation("User {UserId} deleted successfully.", userId);
                 return Ok(new { Message = "User deleted successfully." });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error deleting user account for user {UserId}.", _UserRepo.GetUserIdFromJwtClaims());
-                return StatusCode(StatusCodes.Status500InternalServerError, new ErrorResponse { Message = "An error occurred while deleting the user account." });
+                _logger.LogError(ex, "Error deleting user {UserId}.", _UserRepo.GetUserIdFromJwtClaims());
+                return StatusCode(StatusCodes.Status500InternalServerError, new ErrorResponse { Message = "An error occurred." });
             }
         }
+
 
         // Admin-specific endpoint to delete any user by ID (example)
         [HttpDelete("AdminDelete/{userId}")]

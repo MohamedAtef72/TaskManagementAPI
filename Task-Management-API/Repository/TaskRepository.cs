@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Task_Management_API.DTO;
 using Task_Management_API.Interfaces;
 using Task_Management_API.Models;
+using Task_Management_API.Paggination;
 namespace Task_Management_API.Repository
 {
     public class TaskRepository : BaseRepository<Tasks>, ITaskRepository
@@ -16,13 +17,11 @@ namespace Task_Management_API.Repository
             _userManager = userManager;
             _httpContextAccessor = httpContextAccessor;
         }
-
         // Get user-specific tasks
-        public async Task<List<TaskInformation>> GetUserTasksAsync(string userId)
+        public async Task<PaginatedList<TaskInformation>> GetUserTasksPaginationAsync(string userId, int pageNumber, int pageSize)
         {
-            var tasksFromDatabase = await _context.Tasks
-                .Where(x => x.UserId == userId)
-                .ToListAsync();
+            var tasksFromDatabase = _context.Tasks
+                .Where(x => x.UserId == userId);
 
             var tasks = tasksFromDatabase.Select(task => new TaskInformation
             {
@@ -30,9 +29,8 @@ namespace Task_Management_API.Repository
                 Description = task.Description,
                 Status = task.Status,
                 DueDate = task.DueDate
-            }).ToList();
-
-            return tasks;
+            });
+            return await PaginatedList<TaskInformation>.CreateAsync(tasks,pageNumber,pageSize);
         }
 
         // Get user tasks as entities

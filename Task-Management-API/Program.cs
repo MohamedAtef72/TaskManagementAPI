@@ -8,6 +8,7 @@ using Task_Management_API.Repository;
 using Task_Management_API.Interfaces;
 using Task_Management_API.Services;
 using Task_Management_API.DTO;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
@@ -22,7 +23,7 @@ builder.Services.Configure<AdminSettings>(
     builder.Configuration.GetSection("AdminSettings"));
 
 // Add Identity with Roles
-builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>{})
+builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options => { })
 .AddEntityFrameworkStores<AppDbContext>()
 .AddDefaultTokenProviders();
 
@@ -34,10 +35,10 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddScoped<IRoleSeederService, RoleSeederService>();
 
 // Add Services For Inject UserRepository
-builder.Services.AddScoped<IUserRepository,UserRepository>();
+builder.Services.AddScoped<IUserRepository, UserRepository>();
 
 // Add Services For Inject TaskRepository
-builder.Services.AddScoped<ITaskRepository,TaskRepository>();
+builder.Services.AddScoped<ITaskRepository, TaskRepository>();
 
 // Add Service To Make Authentication Read From JWT
 builder.Services.AddAuthentication(options =>
@@ -55,23 +56,62 @@ builder.Services.AddAuthentication(options =>
         ValidIssuer = builder.Configuration["JWT:IssuerIP"],
         ValidateAudience = true,
         ValidAudience = builder.Configuration["JWT:AudienceIP"],
+        ValidateLifetime = true, 
+        ValidateIssuerSigningKey = true,
         IssuerSigningKey = new SymmetricSecurityKey(
             Encoding.UTF8.GetBytes(builder.Configuration["JWT:SecritKey"]))
     };
+    // Start Blacklist Validation
+    options.Events = new JwtBearerEvents
+    {
+        OnTokenValidated = async context =>
+        {
+            var cacheService = context.HttpContext.RequestServices.GetRequiredService<ICacheService>();
+
+            string token = context.Request.Headers["Authorization"].FirstOrDefault()?.Split(" ").Last();
+
+            if (!string.IsNullOrEmpty(token) && await cacheService.GetAsync<string>(token) != null)
+            {
+                context.Fail("This token has been blacklisted.");
+                return; 
+            }
+
+        },
+        OnAuthenticationFailed = context =>
+        {
+            return Task.CompletedTask;
+        }
+    };
+    // End BlackList Validate
 });
+
+// Redis Configuration
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = builder.Configuration.GetConnectionString("RedisConnection");
+    options.InstanceName = builder.Configuration["Redis:InstanceName"];
+});
+
+// Register Redis Cache Service
+builder.Services.AddScoped<ICacheService, RedisCacheService>();
+
+
 var app = builder.Build();
+
 // Seed roles and admin users
 using (var scope = app.Services.CreateScope())
 {
     var seeder = scope.ServiceProvider.GetRequiredService<IRoleSeederService>();
     await seeder.SeedRolesAndAdminAsync();
 }
+
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
+
 app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
