@@ -378,7 +378,7 @@ Interactive API documentation is available via ***Swagger UI*** at `/swagger` wh
 
 ***Mohamed Atef***
 - GitHub: [@MohamedAtef72](https://github.com/MohamedAtef72)
-- LinkedIn: [Mohamed Atef](https://linkedin.com/in/mohamed-atef)
+- LinkedIn: [Mohamed Atef](https://www.linkedin.com/in/mohamed-atef-088a55272/)
 - Email: ateefmohamed832@gmail.com
 
 ## 🙏 Acknowledgments
