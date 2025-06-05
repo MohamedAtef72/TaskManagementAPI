@@ -1,14 +1,12 @@
 ﻿using Microsoft.AspNetCore.Mvc;
-using Task_Management_API.Models;
-using Task_Management_API.Repository;
-using Task_Management_API.DTO;
 using Microsoft.AspNetCore.Authorization;
-using Task_Management_API.Interfaces;
-using Task_Management_API.RolesConstant;
-using Microsoft.Extensions.Logging;
 using System.Text.Json;
-using Task_Management_API.Paggination;
-using Task_Management_API.Services;
+using Task_Management_Api.Application.DTO;
+using Task_Management_Api.Application.Interfaces;
+using Task_Management_API.Domain.Constants;
+using Task_Management_Api.Application.Pagination;
+using Task_Management_API.Domain.Models;
+
 
 namespace Task_Management_API.Controllers
 {
@@ -55,7 +53,7 @@ namespace Task_Management_API.Controllers
                 if (!paginatedTasks.Items.Any())
                 {
                     _logger.LogInformation("No tasks found.");
-                    return Ok(new { Message = "No tasks found.", Tasks = new List<Tasks>() });
+                    return Ok(new { Message = "No tasks found.", Tasks = new List<AppTask>() });
                 }
 
                 Response.Headers.Add("X-Pagination", JsonSerializer.Serialize(new
@@ -91,7 +89,7 @@ namespace Task_Management_API.Controllers
             }
         }
 
-        [HttpGet("ShowTasks")]
+        [HttpGet("MyTasks")]
         [Authorize(Roles = Roles.Admin + "," + Roles.User + "," + Roles.Manager)]
         public async Task<IActionResult> GetUserTasks([FromQuery] PaginationParams paginationParams)
         {
@@ -112,7 +110,6 @@ namespace Task_Management_API.Controllers
 
                 string cacheKey = $"user_tasks_{userId}_page{paginationParams.PageNumber}_size{paginationParams.PageSize}";
 
-                // محاولة الحصول على البيانات من الكاش أولاً
                 var cachedResponse = await _cacheService.GetAsync<object>(cacheKey);
                 if (cachedResponse != null)
                 {
@@ -174,7 +171,7 @@ namespace Task_Management_API.Controllers
                     return Ok(cachedTask);
                 }
 
-                Tasks? task = null;
+                AppTask? task = null;
                 if (await _userRepo.IsUserInRoleAsync(userId, Roles.Admin))
                 {
                     task = await _taskRepo.GetByIdAsync(id);
@@ -239,7 +236,7 @@ namespace Task_Management_API.Controllers
                     return NotFound(new ErrorResponse { Message = "User not found." });
                 }
 
-                var task = new Tasks
+                var task = new AppTask
                 {
                     Title = taskFromRequest.Title,
                     Description = taskFromRequest.Description,
@@ -302,7 +299,7 @@ namespace Task_Management_API.Controllers
                     return Unauthorized(new ErrorResponse { Message = "User ID could not be determined from the token." });
                 }
 
-                Tasks? taskFromDatabase = null;
+                AppTask? taskFromDatabase = null;
                 if (await _userRepo.IsUserInRoleAsync(userId, Roles.Admin))
                 {
                     taskFromDatabase = await _taskRepo.GetByIdAsync(id);

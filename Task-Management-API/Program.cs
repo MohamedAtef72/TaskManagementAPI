@@ -1,46 +1,58 @@
-using Task_Management_API.Models;
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
-using Task_Management_API.Repository;
-using Task_Management_API.Interfaces;
-using Task_Management_API.Services;
-using Task_Management_API.DTO;
+using Task_Management_API.Domain.Models;
+using Task_Management_API.Infrastructure.Data;
+using Task_Management_Api.Application.DTO;
+using Task_Management_Api.Application.Interfaces;
+using Task_Management_API.Infrastructure.Repositories;
+using Task_Management_API.Infrastructure.Services;
+using System.IdentityModel.Tokens.Jwt;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
+// Add services to the container
 builder.Services.AddControllers();
-
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// Configure AdminSettings
-builder.Services.Configure<AdminSettings>(
+// Admin Settings
+builder.Services.Configure<AdminSetting>(
     builder.Configuration.GetSection("AdminSettings"));
 
 // Add Identity with Roles
 builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options => { })
-.AddEntityFrameworkStores<AppDbContext>()
-.AddDefaultTokenProviders();
+    .AddEntityFrameworkStores<AppDbContext>()
+    .AddDefaultTokenProviders();
 
-// Add Service for Congiuration With Database
+// Configure DB Context
 builder.Services.AddDbContext<AppDbContext>(options =>
 {
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"));
 });
+
+
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = builder.Configuration.GetConnectionString("RedisConnection");
+});
+
+builder.Services.AddDistributedMemoryCache(); 
+builder.Services.AddScoped<ICacheService, RedisCacheService>(); 
+
+
+// ✅ Token Blacklist Service
+builder.Services.AddScoped<ITokenBlacklistService, TokenBlacklistService>();
+
+// Application Services
 builder.Services.AddScoped<IRoleSeederService, RoleSeederService>();
-
-// Add Services For Inject UserRepository
 builder.Services.AddScoped<IUserRepository, UserRepository>();
-
-// Add Services For Inject TaskRepository
+builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<ITaskRepository, TaskRepository>();
 
-// Add Service To Make Authentication Read From JWT
+// JWT Authentication
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -48,53 +60,32 @@ builder.Services.AddAuthentication(options =>
 })
 .AddJwtBearer(options =>
 {
-    options.SaveToken = true;
-    options.RequireHttpsMetadata = false;
-    options.TokenValidationParameters = new TokenValidationParameters()
+    var key = Encoding.ASCII.GetBytes(builder.Configuration["JWT:SecritKey"]!);
+
+    options.TokenValidationParameters = new TokenValidationParameters
     {
-        ValidateIssuer = true,
-        ValidIssuer = builder.Configuration["JWT:IssuerIP"],
-        ValidateAudience = true,
-        ValidAudience = builder.Configuration["JWT:AudienceIP"],
-        ValidateLifetime = true, 
         ValidateIssuerSigningKey = true,
-        IssuerSigningKey = new SymmetricSecurityKey(
-            Encoding.UTF8.GetBytes(builder.Configuration["JWT:SecritKey"]))
+        IssuerSigningKey = new SymmetricSecurityKey(key),
+        ValidateIssuer = false,
+        ValidateAudience = false,
+        ClockSkew = TimeSpan.Zero
     };
-    // Start Blacklist Validation
+
+    // ✅ Reject token if it’s in the blacklist
     options.Events = new JwtBearerEvents
     {
         OnTokenValidated = async context =>
         {
-            var cacheService = context.HttpContext.RequestServices.GetRequiredService<ICacheService>();
+            var tokenBlacklistService = context.HttpContext.RequestServices.GetRequiredService<ITokenBlacklistService>();
+            var token = context.SecurityToken as JwtSecurityToken;
 
-            string token = context.Request.Headers["Authorization"].FirstOrDefault()?.Split(" ").Last();
-
-            if (!string.IsNullOrEmpty(token) && await cacheService.GetAsync<string>(token) != null)
+            if (token != null && await tokenBlacklistService.IsTokenBlacklistedAsync(token.RawData))
             {
-                context.Fail("This token has been blacklisted.");
-                return; 
+                context.Fail("Token is blacklisted.");
             }
-
-        },
-        OnAuthenticationFailed = context =>
-        {
-            return Task.CompletedTask;
         }
     };
-    // End BlackList Validate
 });
-
-// Redis Configuration
-builder.Services.AddStackExchangeRedisCache(options =>
-{
-    options.Configuration = builder.Configuration.GetConnectionString("RedisConnection");
-    options.InstanceName = builder.Configuration["Redis:InstanceName"];
-});
-
-// Register Redis Cache Service
-builder.Services.AddScoped<ICacheService, RedisCacheService>();
-
 
 var app = builder.Build();
 
@@ -105,7 +96,7 @@ using (var scope = app.Services.CreateScope())
     await seeder.SeedRolesAndAdminAsync();
 }
 
-// Configure the HTTP request pipeline.
+// Configure HTTP request pipeline
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
