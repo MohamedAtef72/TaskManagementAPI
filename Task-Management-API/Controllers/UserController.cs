@@ -1,26 +1,24 @@
-﻿using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
-using Task_Management_API.Models;
-using Task_Management_API.Repository; 
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
-using Task_Management_API.DTO;
-using Task_Management_API.Interfaces; 
-using Task_Management_API.RolesConstant; 
-using Microsoft.Extensions.Logging;
-using Task_Management_API.Paggination;
+using Task_Management_Api.Application.DTO;
+using Task_Management_Api.Application.Interfaces;
+using Task_Management_API.Domain.Constants;
+using Task_Management_Api.Application.Pagination;
+using Task_Management_API.Domain.Models;
+
 using System.Text.Json;
 
 namespace Task_Management_API.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize] // All endpoints in this controller require authentication by default
+    [Authorize] 
     public class UserController : ControllerBase
     {
-        private readonly IUserRepository _UserRepo; // Use interface for dependency injection
-        private readonly UserManager<ApplicationUser> _userManager; // Already injected
-        private readonly ILogger<UserController> _logger; // Inject ILogger
+        private readonly IUserRepository _UserRepo; 
+        private readonly UserManager<ApplicationUser> _userManager; 
+        private readonly ILogger<UserController> _logger; 
         private readonly ICacheService _cacheService;
 
         public UserController(IUserRepository userRepository, UserManager<ApplicationUser> userManager, ILogger<UserController> logger, ICacheService cacheService)
@@ -32,7 +30,7 @@ namespace Task_Management_API.Controllers
         }
 
         // Get all users - Typically restricted to Admin or Manager roles for security
-        [HttpGet("Get")]
+        [HttpGet("GetAllUsers")]
         [Authorize(Roles = Roles.Admin + "," + Roles.Manager)]
         public async Task<IActionResult> Get([FromQuery] PaginationParams paginationParams)
         {

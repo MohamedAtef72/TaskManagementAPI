@@ -1,16 +1,15 @@
-﻿using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Http;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims; 
+using System.Security.Claims;
 using System.Text;
-using Task_Management_API.DTO;
-using Task_Management_API.Interfaces;
-using Task_Management_API.Models;
-using Task_Management_API.RolesConstant; 
+using Task_Management_Api.Application.DTO;
+using Task_Management_Api.Application.Interfaces;
+using Task_Management_API.Domain.Constants;
+using Task_Management_API.Domain.Models;
 
 namespace Task_Management_API.Controllers
 {
@@ -18,17 +17,27 @@ namespace Task_Management_API.Controllers
     [ApiController]
     public class AccountController : ControllerBase
     {
-        private readonly UserManager<ApplicationUser> _UserManager;
-        private readonly IConfiguration _Config;
+        private readonly UserManager<ApplicationUser> _userManager;
+        private readonly IConfiguration _config;
         private readonly ILogger<AccountController> _logger;
         private readonly ICacheService _cacheService;
+        private readonly IAuthService _authService;
+        private readonly ITokenBlacklistService _tokenBlacklistService;
 
-        public AccountController(UserManager<ApplicationUser> userManager, IConfiguration config ,ILogger<AccountController> logger,ICacheService cacheService)
+        public AccountController(
+            UserManager<ApplicationUser> userManager,
+            IConfiguration config,
+            ILogger<AccountController> logger,
+            ICacheService cacheService,
+            IAuthService authService,
+            ITokenBlacklistService tokenBlacklistService)
         {
-            _UserManager = userManager;
-            _Config = config;
+            _userManager = userManager;
+            _config = config;
             _logger = logger;
             _cacheService = cacheService;
+            _authService = authService;
+            _tokenBlacklistService = tokenBlacklistService;
         }
 
         [HttpPost("Register")]
@@ -67,7 +76,7 @@ namespace Task_Management_API.Controllers
                 Country = UserFromRequest.Country,
             };
 
-            IdentityResult result = await _UserManager.CreateAsync(user, UserFromRequest.Password);
+            IdentityResult result = await _userManager.CreateAsync(user, UserFromRequest.Password);
 
             if (!result.Succeeded)
             {
@@ -87,19 +96,19 @@ namespace Task_Management_API.Controllers
                     new Claim(ClaimTypes.NameIdentifier, user.Id),
                     new Claim(ClaimTypes.Name, user.UserName),
                 };
-                await _UserManager.AddClaimsAsync(user, userClaims);
+                await _userManager.AddClaimsAsync(user, userClaims);
 
-                await _UserManager.AddToRoleAsync(user, Roles.User); 
+                await _userManager.AddToRoleAsync(user, Roles.User);
 
                 // Return a success response
                 return Ok(new { Message = "User registered successfully.", UserId = user.Id });
             }
         }
 
+
         [HttpPost("Login")]
         public async Task<IActionResult> Login([FromBody] UserLogin UserFromRequest)
         {
-            // 1. Validate incoming request body
             if (UserFromRequest == null)
             {
                 return BadRequest(new ErrorResponse
@@ -109,7 +118,6 @@ namespace Task_Management_API.Controllers
                 });
             }
 
-            // 2. Validate model state
             if (!ModelState.IsValid)
             {
                 var errors = ModelState.Values
@@ -123,11 +131,11 @@ namespace Task_Management_API.Controllers
                 });
             }
 
-            // Check if user exists
-            ApplicationUser userFromDb = await _UserManager.FindByNameAsync(UserFromRequest.UserName);
+            ApplicationUser userFromDb = await _userManager.Users
+                .Include(u => u.RefreshTokens)
+                .FirstOrDefaultAsync(u => u.UserName == UserFromRequest.UserName);
 
-            // Use a generic error message for security (don't reveal if username exists)
-            if (userFromDb == null)
+            if (userFromDb == null || !await _userManager.CheckPasswordAsync(userFromDb, UserFromRequest.Password))
             {
                 return Unauthorized(new ErrorResponse
                 {
@@ -136,100 +144,101 @@ namespace Task_Management_API.Controllers
                 });
             }
 
-            // Check password
-            bool passwordIsValid = await _UserManager.CheckPasswordAsync(userFromDb, UserFromRequest.Password);
+            var userClaims = await _userManager.GetClaimsAsync(userFromDb);
+            var roles = await _userManager.GetRolesAsync(userFromDb);
 
-            if (!passwordIsValid)
-            {
-                return Unauthorized(new ErrorResponse
-                {
-                    Message = "Login failed.",
-                    Errors = new List<string> { "Invalid username or password." }
-                });
-            }
-
-            var userClaims = await _UserManager.GetClaimsAsync(userFromDb);
-
-            var roles = await _UserManager.GetRolesAsync(userFromDb);
-
-            var authClaims = new List<Claim>(userClaims); 
-
+            var authClaims = new List<Claim>(userClaims);
             foreach (var role in roles)
             {
                 authClaims.Add(new Claim(ClaimTypes.Role, role));
             }
 
-            var signInKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_Config["JWT:SecritKey"]));
-            SigningCredentials credentials = new SigningCredentials(signInKey, SecurityAlgorithms.HmacSha256);
+            var signInKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_config["JWT:SecritKey"]));
+            var credentials = new SigningCredentials(signInKey, SecurityAlgorithms.HmacSha256);
 
-            JwtSecurityToken MyToken = new JwtSecurityToken(
-                audience: _Config["JWT:AudienceIP"],
-                issuer: _Config["JWT:IssuerIP"],
-                claims: authClaims, 
-                signingCredentials: credentials,
-                expires: DateTime.UtcNow.AddMinutes(30) 
+            var accessTokenExpiration = DateTime.UtcNow.AddMinutes(30);
+            var jwtToken = new JwtSecurityToken(
+                audience: _config["JWT:AudienceIP"],
+                issuer: _config["JWT:IssuerIP"],
+                claims: authClaims,
+                expires: accessTokenExpiration,
+                signingCredentials: credentials
             );
 
-            // Return the token
+            var accessToken = new JwtSecurityTokenHandler().WriteToken(jwtToken);
+
+            var refreshToken = new RefreshToken
+            {
+                Token = Guid.NewGuid().ToString(),
+                CreatedDate = DateTime.UtcNow,
+                ExpiryDate = DateTime.UtcNow.AddDays(7),
+                CreatedByIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                UserId = userFromDb.Id
+            };
+
+            userFromDb.RefreshTokens.Add(refreshToken);
+            await _userManager.UpdateAsync(userFromDb);
+
             return Ok(new
             {
-                token = new JwtSecurityTokenHandler().WriteToken(MyToken),
-                expiration = MyToken.ValidTo 
+                token = accessToken,
+                expiration = accessTokenExpiration,
+                refreshToken = refreshToken.Token,
+                refreshTokenExpiry = refreshToken.ExpiryDate
             });
         }
-        [HttpPost("logout")]
+
+        [HttpPost("Refresh")]
+        public async Task<IActionResult> Refresh([FromBody] AuthResultDTO request)
+        {
+            var principal = _authService.GetPrincipalFromExpiredToken(request.AccessToken);
+            if (principal == null)
+                return BadRequest("Invalid access token.");
+
+            var userId = principal.FindFirstValue(ClaimTypes.NameIdentifier);
+
+            var user = await _userManager.Users
+                .Include(u => u.RefreshTokens)
+                .FirstOrDefaultAsync(u => u.Id == userId);
+
+            if (user == null)
+                return Unauthorized("User not found.");
+
+            var storedRefreshToken = user.RefreshTokens
+                .FirstOrDefault(rt => rt.Token == request.RefreshToken);
+
+            if (storedRefreshToken == null || storedRefreshToken.ExpiryDate < DateTime.UtcNow)
+                return Unauthorized("Invalid or expired refresh token.");
+
+            var result = await _authService.GenerateTokenAsync(user, HttpContext.Connection.RemoteIpAddress?.ToString()!);
+
+            user.RefreshTokens.Remove(storedRefreshToken);
+            user.RefreshTokens.Add(new RefreshToken
+            {
+                Token = result.RefreshToken,
+                CreatedDate = DateTime.UtcNow,
+                ExpiryDate = DateTime.UtcNow.AddDays(7),
+                CreatedByIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                UserId = user.Id
+            });
+
+            await _userManager.UpdateAsync(user);
+
+            return Ok(result);
+        }
+
+
+
         [Authorize]
+        [HttpPost("Logout")]
         public async Task<IActionResult> Logout()
         {
-            // Get the current user's ID from the claims
-            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            if (string.IsNullOrEmpty(userId))
-            {
-                _logger.LogWarning("Logout attempt by unidentifiable user.");
-                return Unauthorized(new ErrorResponse
-                {
-                    Message = "Logout failed.",
-                    Errors = new List<string> { "User not found or not authenticated." }
-                });
-            }
+            var token = Request.Headers["Authorization"].ToString().Replace("Bearer ", "");
+            var expiresAt = DateTime.UtcNow.AddMinutes(15); 
 
-            // Get the JWT token from the Authorization header
-            string token = HttpContext.Request.Headers["Authorization"].FirstOrDefault()?.Split(" ").Last();
-
-            if (string.IsNullOrEmpty(token))
-            {
-                _logger.LogWarning("Logout attempt without a token for user: {UserId}", userId);
-                return BadRequest(new ErrorResponse
-                {
-                    Message = "Logout failed.",
-                    Errors = new List<string> { "No token provided." }
-                });
-            }
-
-            try
-            {
-                // Read the token to get its expiration time
-                var tokenHandler = new JwtSecurityTokenHandler();
-                var jwtToken = tokenHandler.ReadJwtToken(token);
-                var expiration = jwtToken.ValidTo;
-
-                // Blacklist the token in the cache until its natural expiration
-                // The key for the blacklist could be the token itself or its JTI (JWT ID) if available.
-                // For simplicity, we'll use the token itself as the key.
-                await _cacheService.SetAsync(token, "blacklisted", expiration - DateTime.UtcNow);
-
-                _logger.LogInformation("User {UserId} logged out successfully. Token blacklisted until {Expiration}", userId, expiration);
-                return Ok(new { Message = "Logged out successfully." });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error during logout for user {UserId}", userId);
-                return StatusCode(StatusCodes.Status500InternalServerError, new ErrorResponse
-                {
-                    Message = "An error occurred during logout.",
-                    Errors = new List<string> { ex.Message }
-                });
-            }
+            await _tokenBlacklistService.AddTokenToBlacklistAsync(token, expiresAt);
+            return Ok(new { Message = "Logged out successfully" });
         }
+
     }
 }
