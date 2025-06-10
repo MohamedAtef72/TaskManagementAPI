@@ -112,8 +112,7 @@ Create or update your `appsettings.json` file with the following configuration:
   },
   "JWT": {
     "SecretKey": "Your SecretKey",
-    "AudienceIP": "TaskManagementAPI",
-    "IssuerIP": "https://localhost:7001"
+    "AudienceIP": "TaskManagementAPI"
   }
 }
 ```
@@ -149,11 +148,6 @@ dotnet ef database update
 ```bash
 dotnet run
 ```
-
-The API will be available at:
-- ***HTTPS***: https://localhost:7001
-- ***HTTP***: http://localhost:5000
-- ***Swagger UI***: https://localhost:7001/swagger
 
 ## 📚 API Endpoints
 
