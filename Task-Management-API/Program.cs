@@ -33,17 +33,16 @@ builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"));
 });
 
-
+// Redis Cache
 builder.Services.AddStackExchangeRedisCache(options =>
 {
     options.Configuration = builder.Configuration.GetConnectionString("RedisConnection");
 });
 
-builder.Services.AddDistributedMemoryCache(); 
-builder.Services.AddScoped<ICacheService, RedisCacheService>(); 
+builder.Services.AddDistributedMemoryCache();
+builder.Services.AddScoped<ICacheService, RedisCacheService>();
 
-
-// ✅ Token Blacklist Service
+// Token Blacklist Service
 builder.Services.AddScoped<ITokenBlacklistService, TokenBlacklistService>();
 
 // Application Services
@@ -71,7 +70,6 @@ builder.Services.AddAuthentication(options =>
         ClockSkew = TimeSpan.Zero
     };
 
-    // ✅ Reject token if it’s in the blacklist
     options.Events = new JwtBearerEvents
     {
         OnTokenValidated = async context =>
@@ -89,14 +87,16 @@ builder.Services.AddAuthentication(options =>
 
 var app = builder.Build();
 
-// Seed roles and admin users
+// ✅ Seed database before starting the pipeline
 using (var scope = app.Services.CreateScope())
 {
+    var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    dbContext.Database.EnsureCreated(); // أو dbContext.Database.Migrate(); لو عندك Migration
     var seeder = scope.ServiceProvider.GetRequiredService<IRoleSeederService>();
     await seeder.SeedRolesAndAdminAsync();
 }
 
-// Configure HTTP request pipeline
+// Configure the HTTP request pipeline
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -107,4 +107,5 @@ app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+
 app.Run();

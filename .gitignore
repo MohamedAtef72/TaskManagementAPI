@@ -365,3 +365,4 @@ FodyWeavers.xsd
 # Custom ignores for sensitive configuration files
 appsettings.json
 appsettings.*.json
+.env
