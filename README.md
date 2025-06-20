@@ -96,11 +96,8 @@ Create your `appsettings.json` configuration:
 ### 4. Database Setup
 
 ```bash
-# Create initial migration
-dotnet ef migrations add InitialCreate
-
-# Update database
-dotnet ef database update
+Add-Migration InitialCreate -StartupProject Task-Management-API -Project Task-Management-API.Infrastructure
+Update-Database -StartupProject Task-Management-API -Project Task-Management-API.Infrastructure
 ```
 
 ### 5. Run the Application
